@@ -46,11 +46,10 @@
  * Hardware Prefetcher Definition.
  */
 
-#include "mem/cache/prefetch/base.hh"
-
 #include <list>
 
 #include "base/intmath.hh"
+#include "mem/cache/prefetch/base.hh"
 #include "mem/cache/base.hh"
 #include "sim/system.hh"
 

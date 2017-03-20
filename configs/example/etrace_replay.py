@@ -41,13 +41,13 @@ import optparse
 
 from m5.util import addToPath, fatal
 
-addToPath('../')
+addToPath('../common')
 
-from common import Options
-from common import Simulation
-from common import CacheConfig
-from common import MemConfig
-from common.Caches import *
+import Options
+import Simulation
+import CacheConfig
+import MemConfig
+from Caches import *
 
 parser = optparse.OptionParser()
 Options.addCommonOptions(parser)

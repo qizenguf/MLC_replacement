@@ -387,7 +387,8 @@ class DDR3_1600_8x8(DRAMCtrl):
     IDD2P1 = '32mA'
     IDD6 = '20mA'
     VDD = '1.5V'
-
+class DDR3_1600_x64(DDR3_1600_8x8):
+   device_size = '8MB'
 # A single HMC-2500 x32 model based on:
 # [1] DRAMSpec: a high-level DRAM bank modelling tool
 # developed at the University of Kaiserslautern. This high level tool

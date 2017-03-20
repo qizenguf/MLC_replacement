@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012, 2015-2016 ARM Limited
+# Copyright (c) 2010-2012, 2015 ARM Limited
 # All rights reserved.
 #
 # The license below extends only to copyright in the software and shall
@@ -42,7 +42,7 @@
 from m5.objects import *
 from Benchmarks import *
 from m5.util import *
-from common import PlatformConfig
+import PlatformConfig
 
 # Populate to reflect supported os types per target ISA
 os_types = { 'alpha' : [ 'linux' ],
@@ -169,7 +169,7 @@ def makeSparcSystem(mem_mode, mdesc=None, cmdline=None):
     self.partition_desc.port = self.membus.master
     self.intrctrl = IntrControl()
     self.disk0 = CowMmDisk()
-    self.disk0.childImage(mdesc.disk())
+    self.disk0.childImage(disk('disk.s10hw2'))
     self.disk0.pio = self.iobus.master
 
     # The puart0 and hvuart are placed on the IO bus, so create ranges
@@ -203,7 +203,7 @@ def makeSparcSystem(mem_mode, mdesc=None, cmdline=None):
 
 def makeArmSystem(mem_mode, machine_type, num_cpus=1, mdesc=None,
                   dtb_filename=None, bare_metal=False, cmdline=None,
-                  external_memory="", ruby=False):
+                  external_memory=""):
     assert machine_type
 
     default_dtbs = {
@@ -233,12 +233,11 @@ def makeArmSystem(mem_mode, machine_type, num_cpus=1, mdesc=None,
 
     self.readfile = mdesc.script()
     self.iobus = IOXBar()
-    if not ruby:
-        self.bridge = Bridge(delay='50ns')
-        self.bridge.master = self.iobus.slave
-        self.membus = MemBus()
-        self.membus.badaddr_responder.warn_access = "warn"
-        self.bridge.slave = self.membus.master
+    self.membus = MemBus()
+    self.membus.badaddr_responder.warn_access = "warn"
+    self.bridge = Bridge(delay='50ns')
+    self.bridge.master = self.iobus.slave
+    self.bridge.slave = self.membus.master
 
     self.mem_mode = mem_mode
 
@@ -319,7 +318,7 @@ def makeArmSystem(mem_mode, machine_type, num_cpus=1, mdesc=None,
         # iobus, as gem5's membus is only used for initialization and
         # SST doesn't use it.  Attaching nvmem to iobus solves this issue.
         # During initialization, system_port -> membus -> iobus -> nvmem.
-        if external_memory or ruby:
+        if external_memory:
             self.realview.setupBootLoader(self.iobus,  self, binary)
         else:
             self.realview.setupBootLoader(self.membus, self, binary)
@@ -367,36 +366,20 @@ def makeArmSystem(mem_mode, machine_type, num_cpus=1, mdesc=None,
         self.bridge.ranges = [self.realview.nvmem.range]
 
         self.realview.attachOnChipIO(self.iobus)
-        # Attach off-chip devices
-        self.realview.attachIO(self.iobus)
-    elif ruby:
-        self._dma_ports = [ ]
-        self.realview.attachOnChipIO(self.iobus, dma_ports=self._dma_ports)
-        # Force Ruby to treat the boot ROM as an IO device.
-        self.realview.nvmem.in_addr_map = False
-        self.realview.attachIO(self.iobus, dma_ports=self._dma_ports)
     else:
         self.realview.attachOnChipIO(self.membus, self.bridge)
-        # Attach off-chip devices
-        self.realview.attachIO(self.iobus)
 
+    # Attach off-chip devices
+    self.realview.attachIO(self.iobus)
     for dev_id, dev in enumerate(pci_devices):
         dev.pci_bus, dev.pci_dev, dev.pci_func = (0, dev_id + 1, 0)
-        self.realview.attachPciDevice(
-            dev, self.iobus,
-            dma_ports=self._dma_ports if ruby else None)
+        self.realview.attachPciDevice(dev, self.iobus)
 
     self.intrctrl = IntrControl()
     self.terminal = Terminal()
     self.vncserver = VncServer()
 
-    if not ruby:
-        self.system_port = self.membus.slave
-
-    if ruby:
-        fatal("You're trying to use Ruby on ARM, which is not working " \
-              "properly yet. If you want to test it anyway, you " \
-              "need to remove this fatal error from FSConfig.py.")
+    self.system_port = self.membus.slave
 
     return self
 

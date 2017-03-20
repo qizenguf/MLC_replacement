@@ -51,17 +51,17 @@ from m5.defines import buildEnv
 from m5.objects import *
 from m5.util import addToPath, fatal
 
-addToPath('../')
+addToPath('../common')
+addToPath('../ruby')
 
-from ruby import Ruby
-
-from common import Options
-from common import Simulation
-from common import CacheConfig
-from common import CpuConfig
-from common import MemConfig
-from common.Caches import *
-from common.cpu2000 import *
+import Options
+import Ruby
+import Simulation
+import CacheConfig_l3
+import CpuConfig
+import MemConfig
+from Caches_l3 import *
+from cpu2000 import *
 
 # Check if KVM support has been enabled, we might need to do VM
 # configuration if that's the case.
@@ -209,7 +209,7 @@ for cpu in system.cpu:
 
 if is_kvm_cpu(CPUClass) or is_kvm_cpu(FutureClass):
     if buildEnv['TARGET_ISA'] == 'x86':
-        system.kvm_vm = KvmVM()
+        system.vm = KvmVM()
         for process in multiprocesses:
             process.useArchPT = True
             process.kvmInSE = True

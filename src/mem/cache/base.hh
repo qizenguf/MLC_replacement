@@ -265,12 +265,6 @@ class BaseCache : public MemObject
     const Cycles lookupLatency;
 
     /**
-     * The latency of data access of a cache. It occurs when there is
-     * an access to the cache.
-     */
-    const Cycles dataLatency;
-
-    /**
      * This is the forward latency of the cache. It occurs when there
      * is a cache miss and a request is forwarded downstream, in
      * particular an outbound miss.
@@ -279,13 +273,19 @@ class BaseCache : public MemObject
 
     /** The latency to fill a cache block */
     const Cycles fillLatency;
-
+    
+	/** The latency of a write in this device.
+     */
+    const Cycles writeLatency;
+    
     /**
      * The latency of sending reponse to its upper level cache/core on
      * a linefill. The responseLatency parameter captures this
      * latency.
      */
     const Cycles responseLatency;
+    
+
 
     /** The number of targets for each MSHR. */
     const int numTarget;
@@ -518,7 +518,8 @@ class BaseCache : public MemObject
         WriteQueueEntry *wq_entry =
             writeBuffer.findMatch(blk_addr, pkt->isSecure());
         if (wq_entry && !wq_entry->inService) {
-            DPRINTF(Cache, "Potential to merge writeback %s", pkt->print());
+            DPRINTF(Cache, "Potential to merge writeback %s to %#llx",
+                    pkt->cmdString(), pkt->getAddr());
         }
 
         writeBuffer.allocate(blk_addr, blkSize, pkt, time, order++);

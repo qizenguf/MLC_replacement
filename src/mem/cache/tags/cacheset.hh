@@ -59,10 +59,11 @@ class CacheSet
   public:
     /** The associativity of this set. */
     int assoc;
-
+	
     /** Cache blocks in this set, maintained in LRU order 0 = MRU. */
     Blktype **blks;
-
+	uint8_t* m_tree;
+	int* flipBits;
     /**
      * Find a block matching the tag in this set.
      * @param way_id The id of the way that matches the tag.
@@ -78,6 +79,7 @@ class CacheSet
      * @param blk The block to move.
      */
     void moveToHead(Blktype *blk);
+    void moveToFront(Blktype *blk);
 
     /**
      * Move the given block to the tail of the list.
@@ -135,6 +137,109 @@ CacheSet<Blktype>::moveToHead(Blktype *blk)
         ++i;
     } while (next != blk);
 }
+template <class Blktype>
+void
+CacheSet<Blktype>::moveToFront(Blktype *blk) // Pseudo LRU
+{
+
+    int i = 0;
+	int accessed_index = -1;
+    /*for( ; i<assoc; i++ ){
+		if(blks[i] == blk) accessed_index = i;
+	}*/
+	Blktype *next = blk;
+
+    do {
+        assert(i < assoc);
+        //std::swap(blks[i], next);
+        next = blks[i];
+        ++i;
+    } while (next != blk);
+    accessed_index = i-1;
+	assert(accessed_index != -1);
+    
+	if (assoc == 4)
+	{
+      if      (accessed_index==0) { m_tree[0]=1;m_tree[1]=1;     }
+      else if (accessed_index==1) { m_tree[0]=1;m_tree[1]=0;     }
+      else if (accessed_index==2) { m_tree[0]=0;       m_tree[2]=1;}
+      else if (accessed_index==3) { m_tree[0]=0;       m_tree[2]=0;}
+   }
+	else if (assoc == 8)
+   {
+      if      (accessed_index==0) { m_tree[0]=1;m_tree[1]=1;m_tree[2]=1;                            }
+      else if (accessed_index==1) { m_tree[0]=1;m_tree[1]=1;m_tree[2]=0;                            }
+      else if (accessed_index==2) { m_tree[0]=1;m_tree[1]=0;       m_tree[3]=1;                     }
+      else if (accessed_index==3) { m_tree[0]=1;m_tree[1]=0;       m_tree[3]=0;                     }
+      else if (accessed_index==4) { m_tree[0]=0;                     m_tree[4]=1;m_tree[5]=1;       }
+      else if (accessed_index==5) { m_tree[0]=0;                     m_tree[4]=1;m_tree[5]=0;       }
+      else if (accessed_index==6) { m_tree[0]=0;                     m_tree[4]=0;       m_tree[6]=1;}
+      else if (accessed_index==7) { m_tree[0]=0;                     m_tree[4]=0;       m_tree[6]=0;}
+   }
+	else if (assoc == 16) // added by Qi
+	{
+      if      (accessed_index==0) { m_tree[0]=1;m_tree[1]=1;m_tree[2]=1;m_tree[3]=1;                           }
+      else if (accessed_index==1) { m_tree[0]=1;m_tree[1]=1;m_tree[2]=1;m_tree[3]=0;                            }
+      else if (accessed_index==2) { m_tree[0]=1;m_tree[1]=1;m_tree[2]=0;       m_tree[4]=1;                     }
+      else if (accessed_index==3) { m_tree[0]=1;m_tree[1]=1;m_tree[2]=0;       m_tree[4]=0;                     }
+      else if (accessed_index==4) { m_tree[0]=1;m_tree[1]=1;                     m_tree[5]=1;m_tree[6]=1;       }
+      else if (accessed_index==5) { m_tree[0]=1;m_tree[1]=1;                     m_tree[5]=1;m_tree[6]=0;       }
+      else if (accessed_index==6) { m_tree[0]=1;m_tree[1]=1;                     m_tree[5]=0;       m_tree[7]=1;}
+      else if (accessed_index==7) { m_tree[0]=1;m_tree[1]=0;                     m_tree[5]=0;       m_tree[7]=0;}
+      else if (accessed_index==8) { m_tree[0]=0; m_tree[8]=1;m_tree[9]=1;m_tree[10]=1;                            }
+      else if (accessed_index==9) { m_tree[0]=0; m_tree[8]=1;m_tree[9]=1;m_tree[10]=0;                            }
+      else if (accessed_index==10) { m_tree[0]=0; m_tree[8]=1;m_tree[9]=0;       m_tree[11]=1;                     }
+      else if (accessed_index==11) { m_tree[0]=0; m_tree[8]=1;m_tree[9]=0;       m_tree[11]=0;                     }
+      else if (accessed_index==12) { m_tree[0]=0; m_tree[8]=0;                     m_tree[12]=1;m_tree[13]=1;       }
+      else if (accessed_index==13) { m_tree[0]=0; m_tree[8]=0;                     m_tree[12]=1;m_tree[13]=0;       }
+      else if (accessed_index==14) { m_tree[0]=0; m_tree[8]=0;                     m_tree[12]=0;       m_tree[14]=1;}
+      else if (accessed_index==15) { m_tree[0]=0; m_tree[8]=0;                     m_tree[12]=0;       m_tree[14]=0;}
+   }
+	else if (assoc == 32) // added by Qi
+   {
+      if      (accessed_index==0) { m_tree[0]=1; m_tree[1]=1;m_tree[2]=1;m_tree[3]=1;m_tree[4]=1;                           } // 0000 00001
+      else if (accessed_index==1) { m_tree[0]=1; m_tree[1]=1;m_tree[2]=1;m_tree[3]=1;m_tree[4]=0;                            }
+      else if (accessed_index==2) { m_tree[0]=1; m_tree[1]=1;m_tree[2]=1;m_tree[3]=0;	      m_tree[5]=1;                     }
+      else if (accessed_index==3) { m_tree[0]=1; m_tree[1]=1;m_tree[2]=1;m_tree[3]=0;         m_tree[5]=0;                     }
+      else if (accessed_index==4) { m_tree[0]=1; m_tree[1]=1;m_tree[2]=1;                     m_tree[6]=1;m_tree[7]=1;       }
+      else if (accessed_index==5) { m_tree[0]=1; m_tree[1]=1;m_tree[2]=1;                     m_tree[6]=1;m_tree[7]=0;       }
+      else if (accessed_index==6) { m_tree[0]=1; m_tree[1]=1;m_tree[2]=1;                     m_tree[6]=0;       m_tree[8]=1;}
+      else if (accessed_index==7) { m_tree[0]=1; m_tree[1]=1;m_tree[2]=0;                     m_tree[6]=0;       m_tree[8]=0;}
+      else if (accessed_index==8) { m_tree[0]=1; m_tree[1]=0; m_tree[9]=1;m_tree[10]=1;m_tree[11]=1;                            }
+      else if (accessed_index==9) { m_tree[0]=1; m_tree[1]=0; m_tree[9]=1;m_tree[10]=1;m_tree[11]=0;                            }
+      else if (accessed_index==10) { m_tree[0]=1; m_tree[1]=0; m_tree[9]=1;m_tree[10]=0;        m_tree[12]=1;                     }
+      else if (accessed_index==11) { m_tree[0]=1; m_tree[1]=0; m_tree[9]=1;m_tree[10]=0;        m_tree[12]=0;                     }
+      else if (accessed_index==12) { m_tree[0]=1; m_tree[1]=0; m_tree[9]=0;                     m_tree[13]=1;m_tree[14]=1;       }
+      else if (accessed_index==13) { m_tree[0]=1; m_tree[1]=0; m_tree[9]=0;                     m_tree[13]=1;m_tree[14]=0;       }
+      else if (accessed_index==14) { m_tree[0]=1; m_tree[1]=0; m_tree[9]=0;                     m_tree[13]=0;       m_tree[15]=1;}
+      else if (accessed_index==15) { m_tree[0]=1; m_tree[1]=0; m_tree[9]=0;                     m_tree[13]=0;       m_tree[15]=0;}
+      
+      else if (accessed_index== 16) { m_tree[0]=0; m_tree[16]=1;m_tree[17]=1;m_tree[18]=1;m_tree[19]=1;                           } // 0000 00001
+      else if (accessed_index== 17) { m_tree[0]=0; m_tree[16]=1;m_tree[17]=1;m_tree[18]=1;m_tree[19]=0;                            }
+      else if (accessed_index== 18) { m_tree[0]=0; m_tree[16]=1;m_tree[17]=1;m_tree[18]=0;       m_tree[20]=1;                     }
+      else if (accessed_index== 19) { m_tree[0]=0; m_tree[16]=1;m_tree[17]=1;m_tree[18]=0;       m_tree[20]=0;                     }
+      else if (accessed_index== 20) { m_tree[0]=0; m_tree[16]=1;m_tree[17]=1;                    m_tree[21]=1;m_tree[22]=1;       }
+      else if (accessed_index==21) { m_tree[0]=0; m_tree[16]=1;m_tree[17]=1;                     m_tree[21]=1;m_tree[22]=0;       }
+      else if (accessed_index==22) { m_tree[0]=0; m_tree[16]=1;m_tree[17]=1;                     m_tree[21]=0;       m_tree[23]=1;}
+      else if (accessed_index==23) { m_tree[0]=0; m_tree[16]=1;m_tree[17]=0;                     m_tree[21]=0;       m_tree[23]=0;}
+      else if (accessed_index==24) { m_tree[0]=0; m_tree[16]=0; m_tree[24]=1;m_tree[25]=1;m_tree[26]=1;                            }
+      else if (accessed_index==25) { m_tree[0]=0; m_tree[16]=0; m_tree[24]=1;m_tree[25]=1;m_tree[26]=0;                            }
+      else if (accessed_index==26) { m_tree[0]=0; m_tree[16]=0; m_tree[24]=1;m_tree[25]=0;        m_tree[27]=1;                     }
+      else if (accessed_index==27) { m_tree[0]=0; m_tree[16]=0; m_tree[24]=1;m_tree[25]=0;        m_tree[27]=0;                     }
+      else if (accessed_index==28) { m_tree[0]=0; m_tree[16]=0; m_tree[24]=0;                     m_tree[28]=1;m_tree[29]=1;       }
+      else if (accessed_index==29) { m_tree[0]=0; m_tree[16]=0; m_tree[24]=0;                     m_tree[28]=1;m_tree[29]=0;       }
+      else if (accessed_index==30) { m_tree[0]=0; m_tree[16]=0; m_tree[24]=0;                     m_tree[28]=0;       m_tree[30]=1;}
+      else if (accessed_index==31) { m_tree[0]=0; m_tree[16]=0; m_tree[24]=0;                     m_tree[28]=0;       m_tree[30]=0;}
+   }
+   else
+   { 
+	   return;
+     // LOG_PRINT_ERROR("PLRU doesn't support associativity %d", assoc);
+   }
+   return;
+    
+    
+}
 
 template <class Blktype>
 void
@@ -156,6 +261,7 @@ CacheSet<Blktype>::moveToTail(Blktype *blk)
         std::swap(blks[i], next);
         --i;
     } while (next != blk);
+    
 }
 
 #endif

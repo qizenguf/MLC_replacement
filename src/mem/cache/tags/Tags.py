@@ -49,27 +49,42 @@ class BaseTags(ClockedObject):
     # Get the block size from the parent (system)
     block_size = Param.Int(Parent.cache_line_size, "block size in bytes")
 
-    # Get the tag lookup latency from the parent (cache)
-    tag_latency = Param.Cycles(Parent.tag_latency,
-                               "The tag lookup latency for this cache")
-
-    # Get the RAM access latency from the parent (cache)
-    data_latency = Param.Cycles(Parent.data_latency,
-                               "The data access latency for this cache")
-
-    sequential_access = Param.Bool(Parent.sequential_access,
-        "Whether to access tags and data sequentially")
+    # Get the hit latency from the parent (cache)
+    hit_latency = Param.Cycles(Parent.hit_latency,
+                               "The hit latency for this cache")
 
 class BaseSetAssoc(BaseTags):
     type = 'BaseSetAssoc'
     abstract = True
     cxx_header = "mem/cache/tags/base_set_assoc.hh"
     assoc = Param.Int(Parent.assoc, "associativity")
+    sequential_access = Param.Bool(Parent.sequential_access,
+        "Whether to access tags and data sequentially")
 
 class LRU(BaseSetAssoc):
     type = 'LRU'
     cxx_class = 'LRU'
     cxx_header = "mem/cache/tags/lru.hh"
+
+class CAR(BaseSetAssoc):
+    type = 'CAR'
+    cxx_class = 'CAR'
+    cxx_header = "mem/cache/tags/car.hh"
+    #shifSize = Param.Int(Parent.shift_size, "shift size in bytes")
+    #flipSize = Param.Int(Parent.flip_size, "flip size in bytes")
+    #encodingSize = Param.Int(Parent.encoding_size, "encoding size in bytes")
+    #thres = Param.Int(Parent.encoding_threshold, "encoding threshold out of 64 ")
+
+class MLC(BaseSetAssoc):
+    type = 'MLC'
+    cxx_class = 'MLC'
+    cxx_header = "mem/cache/tags/mlc.hh"
+    #shifSize = Param.Int(Parent.shift_size, "shift size in bytes")
+    flipSize = Param.Int(4, "flip size in bytes")
+    encodingSize = Param.Int(4, "encoding size in bytes")
+    loc_weight = Param.Int(0, "location weight")
+    diverse_weight = Param.Float(5.8, "diverse weight")
+    thres = Param.Int(12, "encoding threshold out of 64 ")
 
 class RandomRepl(BaseSetAssoc):
     type = 'RandomRepl'

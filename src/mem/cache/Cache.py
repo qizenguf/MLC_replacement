@@ -53,8 +53,8 @@ class BaseCache(MemObject):
     size = Param.MemorySize("Capacity")
     assoc = Param.Unsigned("Associativity")
 
-    tag_latency = Param.Cycles("Tag lookup latency")
-    data_latency = Param.Cycles("Data access latency")
+    hit_latency = Param.Cycles("Hit latency")
+    write_latency = Param.Cycles("The Write lantecy for this cache")
     response_latency = Param.Cycles("Latency for the return path on a miss");
 
     max_miss_count = Param.Counter(0,
@@ -70,8 +70,8 @@ class BaseCache(MemObject):
     prefetcher = Param.BasePrefetcher(NULL,"Prefetcher attached to cache")
     prefetch_on_access = Param.Bool(False,
          "Notify the hardware prefetcher on every access (not just misses)")
-
-    tags = Param.BaseTags(LRU(), "Tag store (replacement policy)")
+	# replacement change here
+    #tags = Param.BaseTags(RandomRepl(), "Tag store (replacement policy)")
     sequential_access = Param.Bool(False,
         "Whether to access tags and data sequentially")
 
@@ -89,8 +89,11 @@ class Clusivity(Enum): vals = ['mostly_incl', 'mostly_excl']
 
 class Cache(BaseCache):
     type = 'Cache'
+    #tags = Param.BaseTags(LRU(), "Tag store (replacement policy)")
     cxx_header = 'mem/cache/cache.hh'
-
+    tags = Param.BaseTags(LRU(), "Tag store (replacement policy)")
+    
+    #tags = CAR()
     # Control whether this cache should be mostly inclusive or mostly
     # exclusive with respect to upstream caches. The behaviour on a
     # fill is determined accordingly. For a mostly inclusive cache,
@@ -110,3 +113,4 @@ class Cache(BaseCache):
     # this should be set to True for anything but the last-level
     # cache.
     writeback_clean = Param.Bool(False, "Writeback clean lines")
+

@@ -37,6 +37,8 @@ import sys
 import m5
 from m5.objects import *
 
+m5.util.addToPath('../common')
+
 # --------------------
 # Define Command Line Options
 # ====================

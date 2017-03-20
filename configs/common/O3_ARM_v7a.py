@@ -62,28 +62,24 @@ class O3_ARM_v7a_FP(FUDesc):
                OpDesc(opClass='SimdFloatDiv', opLat=3),
                OpDesc(opClass='SimdFloatMisc', opLat=3),
                OpDesc(opClass='SimdFloatMult', opLat=3),
-               OpDesc(opClass='SimdFloatMultAcc',opLat=5),
+               OpDesc(opClass='SimdFloatMultAcc',opLat=1),
                OpDesc(opClass='SimdFloatSqrt', opLat=9),
                OpDesc(opClass='FloatAdd', opLat=5),
                OpDesc(opClass='FloatCmp', opLat=5),
                OpDesc(opClass='FloatCvt', opLat=5),
                OpDesc(opClass='FloatDiv', opLat=9, pipelined=False),
                OpDesc(opClass='FloatSqrt', opLat=33, pipelined=False),
-               OpDesc(opClass='FloatMult', opLat=4),
-               OpDesc(opClass='FloatMultAcc', opLat=5),
-               OpDesc(opClass='FloatMisc', opLat=3) ]
+               OpDesc(opClass='FloatMult', opLat=4) ]
     count = 2
 
 
 # Load/Store Units
 class O3_ARM_v7a_Load(FUDesc):
-    opList = [ OpDesc(opClass='MemRead',opLat=2),
-               OpDesc(opClass='FloatMemRead',opLat=2) ]
+    opList = [ OpDesc(opClass='MemRead',opLat=2) ]
     count = 1
 
 class O3_ARM_v7a_Store(FUDesc):
-    opList = [ OpDesc(opClass='MemWrite',opLat=2),
-               OpDesc(opClass='FloatMemWrite',opLat=2) ]
+    opList = [OpDesc(opClass='MemWrite',opLat=2) ]
     count = 1
 
 # Functional Units for this CPU
@@ -147,8 +143,7 @@ class O3_ARM_v7a_3(DerivO3CPU):
 
 # Instruction Cache
 class O3_ARM_v7a_ICache(Cache):
-    tag_latency = 1
-    data_latency = 1
+    hit_latency = 1
     response_latency = 1
     mshrs = 2
     tgts_per_mshr = 8
@@ -160,8 +155,7 @@ class O3_ARM_v7a_ICache(Cache):
 
 # Data Cache
 class O3_ARM_v7a_DCache(Cache):
-    tag_latency = 2
-    data_latency = 2
+    hit_latency = 2
     response_latency = 2
     mshrs = 6
     tgts_per_mshr = 8
@@ -174,8 +168,7 @@ class O3_ARM_v7a_DCache(Cache):
 # TLB Cache
 # Use a cache as a L2 TLB
 class O3_ARM_v7aWalkCache(Cache):
-    tag_latency = 4
-    data_latency = 4
+    hit_latency = 4
     response_latency = 4
     mshrs = 6
     tgts_per_mshr = 8
@@ -188,8 +181,7 @@ class O3_ARM_v7aWalkCache(Cache):
 
 # L2 Cache
 class O3_ARM_v7aL2(Cache):
-    tag_latency = 12
-    data_latency = 12
+    hit_latency = 12
     response_latency = 12
     mshrs = 16
     tgts_per_mshr = 8

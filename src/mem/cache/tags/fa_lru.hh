@@ -51,7 +51,6 @@
 #include <list>
 #include <unordered_map>
 
-#include "mem/cache/base.hh"
 #include "mem/cache/blk.hh"
 #include "mem/cache/tags/base.hh"
 #include "mem/packet.hh"
@@ -212,7 +211,7 @@ public:
      * @param pkt The request to a find a replacement candidate for.
      * @return The block to place the replacement in.
      */
-    CacheBlk* findVictim(Addr addr) override;
+    CacheBlk* findVictim(Addr addr, PacketPtr pkt = nullptr) override;
 
     void insertBlock(PacketPtr pkt, CacheBlk *blk) override;
 

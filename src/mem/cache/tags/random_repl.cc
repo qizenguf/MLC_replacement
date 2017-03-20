@@ -52,7 +52,7 @@ RandomRepl::accessBlock(Addr addr, bool is_secure, Cycles &lat, int master_id)
 }
 
 CacheBlk*
-RandomRepl::findVictim(Addr addr)
+RandomRepl::findVictim(Addr addr, PacketPtr pkt)
 {
     CacheBlk *blk = BaseSetAssoc::findVictim(addr);
     unsigned set = extractSet(addr);

@@ -146,8 +146,8 @@ Cache::cmpAndSwap(CacheBlk *blk, PacketPtr pkt)
 
 
 void
-Cache::satisfyRequest(PacketPtr pkt, CacheBlk *blk,
-                      bool deferred_response, bool pending_downgrade)
+Cache::satisfyCpuSideRequest(PacketPtr pkt, CacheBlk *blk,
+                             bool deferred_response, bool pending_downgrade)
 {
     assert(pkt->isRequest());
 
@@ -180,7 +180,8 @@ Cache::satisfyRequest(PacketPtr pkt, CacheBlk *blk,
         // supply data to any snoops that have appended themselves to
         // this cache before knowing the store will fail.
         blk->status |= BlkDirty;
-        DPRINTF(CacheVerbose, "%s for %s (write)\n", __func__, pkt->print());
+        DPRINTF(CacheVerbose, "%s for %s addr %#llx size %d (write)\n",
+                __func__, pkt->cmdString(), pkt->getAddr(), pkt->getSize());
     } else if (pkt->isRead()) {
         if (pkt->isLLSC()) {
             blk->trackLoadLocked(pkt);
@@ -190,8 +191,14 @@ Cache::satisfyRequest(PacketPtr pkt, CacheBlk *blk,
         assert(pkt->hasRespData());
         pkt->setDataFromBlock(blk->data, blkSize);
 
-        // determine if this read is from a (coherent) cache or not
-        if (pkt->fromCache()) {
+        // determine if this read is from a (coherent) cache, or not
+        // by looking at the command type; we could potentially add a
+        // packet attribute such as 'FromCache' to make this check a
+        // bit cleaner
+        if (pkt->cmd == MemCmd::ReadExReq ||
+            pkt->cmd == MemCmd::ReadSharedReq ||
+            pkt->cmd == MemCmd::ReadCleanReq ||
+            pkt->cmd == MemCmd::SCUpgradeFailReq) {
             assert(pkt->getSize() == blkSize);
             // special handling for coherent block requests from
             // upper-level caches
@@ -199,14 +206,16 @@ Cache::satisfyRequest(PacketPtr pkt, CacheBlk *blk,
                 // sanity check
                 assert(pkt->cmd == MemCmd::ReadExReq ||
                        pkt->cmd == MemCmd::SCUpgradeFailReq);
-                assert(!pkt->hasSharers());
 
                 // if we have a dirty copy, make sure the recipient
                 // keeps it marked dirty (in the modified state)
                 if (blk->isDirty()) {
                     pkt->setCacheResponding();
-                    blk->status &= ~BlkDirty;
                 }
+                // on ReadExReq we give up our copy unconditionally,
+                // even if this cache is mostly inclusive, we may want
+                // to revisit this
+                invalidateBlock(blk);
             } else if (blk->isWritable() && !pending_downgrade &&
                        !pkt->hasSharers() &&
                        pkt->cmd != MemCmd::ReadCleanReq) {
@@ -227,22 +236,30 @@ Cache::satisfyRequest(PacketPtr pkt, CacheBlk *blk,
                         // (cacheResponding set, hasSharers not set)
                         pkt->setCacheResponding();
 
-                        // if this cache is mostly inclusive, we
-                        // keep the block in the Exclusive state,
-                        // and pass it upwards as Modified
-                        // (writable and dirty), hence we have
-                        // multiple caches, all on the same path
-                        // towards memory, all considering the
-                        // same block writable, but only one
-                        // considering it Modified
+                        if (clusivity == Enums::mostly_excl) {
+                            // if this cache is mostly exclusive with
+                            // respect to the cache above, drop the
+                            // block, no need to first unset the dirty
+                            // bit
+                            invalidateBlock(blk);
+                        } else {
+                            // if this cache is mostly inclusive, we
+                            // keep the block in the Exclusive state,
+                            // and pass it upwards as Modified
+                            // (writable and dirty), hence we have
+                            // multiple caches, all on the same path
+                            // towards memory, all considering the
+                            // same block writable, but only one
+                            // considering it Modified
 
-                        // we get away with multiple caches (on
-                        // the same path to memory) considering
-                        // the block writeable as we always enter
-                        // the cache hierarchy through a cache,
-                        // and first snoop upwards in all other
-                        // branches
-                        blk->status &= ~BlkDirty;
+                            // we get away with multiple caches (on
+                            // the same path to memory) considering
+                            // the block writeable as we always enter
+                            // the cache hierarchy through a cache,
+                            // and first snoop upwards in all other
+                            // branches
+                            blk->status &= ~BlkDirty;
+                        }
                     } else {
                         // if we're responding after our own miss,
                         // there's a window where the recipient didn't
@@ -257,22 +274,15 @@ Cache::satisfyRequest(PacketPtr pkt, CacheBlk *blk,
                 pkt->setHasSharers();
             }
         }
-    } else if (pkt->isUpgrade()) {
-        // sanity check
-        assert(!pkt->hasSharers());
-
-        if (blk->isDirty()) {
-            // we were in the Owned state, and a cache above us that
-            // has the line in Shared state needs to be made aware
-            // that the data it already has is in fact dirty
-            pkt->setCacheResponding();
-            blk->status &= ~BlkDirty;
-        }
     } else {
-        assert(pkt->isInvalidate());
+        // Upgrade or Invalidate
+        assert(pkt->isUpgrade() || pkt->isInvalidate());
+
+        // for invalidations we could be looking at the temp block
+        // (for upgrades we always allocate)
         invalidateBlock(blk);
-        DPRINTF(CacheVerbose, "%s for %s (invalidation)\n", __func__,
-                pkt->print());
+        DPRINTF(CacheVerbose, "%s for %s addr %#llx size %d (invalidation)\n",
+                __func__, pkt->cmdString(), pkt->getAddr(), pkt->getSize());
     }
 }
 
@@ -293,10 +303,13 @@ Cache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
                   "Should never see a write in a read-only cache %s\n",
                   name());
 
-    DPRINTF(CacheVerbose, "%s for %s\n", __func__, pkt->print());
+    DPRINTF(CacheVerbose, "%s for %s addr %#llx size %d\n", __func__,
+            pkt->cmdString(), pkt->getAddr(), pkt->getSize());
 
     if (pkt->req->isUncacheable()) {
-        DPRINTF(Cache, "uncacheable: %s\n", pkt->print());
+        DPRINTF(Cache, "%s%s addr %#llx uncacheable\n", pkt->cmdString(),
+                pkt->req->isInstFetch() ? " (ifetch)" : "",
+                pkt->getAddr());
 
         // flush and invalidate any existing block
         CacheBlk *old_blk(tags->findBlock(pkt->getAddr(), pkt->isSecure()));
@@ -312,8 +325,17 @@ Cache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
         blk = nullptr;
         // lookupLatency is the latency in case the request is uncacheable.
         lat = lookupLatency;
-        return false;
-    }
+        // Update latency decided by if it is read or write
+		if(pkt->isWrite()) {
+			lat = writeLatency;
+		}
+		return false;
+	}
+
+		// Update latency decided by if it is read or write
+		if(pkt->isWrite()) {
+		lat = writeLatency;
+		}
 
     ContextID id = pkt->req->hasContextId() ?
         pkt->req->contextId() : InvalidContextID;
@@ -321,7 +343,9 @@ Cache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
     // that can modify its value.
     blk = tags->accessBlock(pkt->getAddr(), pkt->isSecure(), lat, id);
 
-    DPRINTF(Cache, "%s %s\n", pkt->print(),
+    DPRINTF(Cache, "%s%s addr %#llx size %d (%s) %s\n", pkt->cmdString(),
+            pkt->req->isInstFetch() ? " (ifetch)" : "",
+            pkt->getAddr(), pkt->getSize(), pkt->isSecure() ? "s" : "ns",
             blk ? "hit " + blk->print() : "miss");
 
 
@@ -381,7 +405,7 @@ Cache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
 
         if (blk == nullptr) {
             // need to do a replacement
-            blk = allocateBlock(pkt->getAddr(), pkt->isSecure(), writebacks);
+            blk = allocateBlock(pkt->getAddr(), pkt->isSecure(), writebacks, pkt); // modified
             if (blk == nullptr) {
                 // no replaceable block available: give up, fwd to next level.
                 incMissCount(pkt);
@@ -424,13 +448,12 @@ Cache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
         // like a Writeback which could not find a replaceable block so has to
         // go to next level.
         return false;
-    } else if (blk && (pkt->needsWritable() ? blk->isWritable() :
-                       blk->isReadable())) {
+    } else if ((blk != nullptr) &&
+               (pkt->needsWritable() ? blk->isWritable() :
+                blk->isReadable())) {
         // OK to satisfy access
         incHitCount(pkt);
-        satisfyRequest(pkt, blk);
-        maintainClusivity(pkt->fromCache(), blk);
-
+        satisfyCpuSideRequest(pkt, blk);
         return true;
     }
 
@@ -446,18 +469,6 @@ Cache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
     }
 
     return false;
-}
-
-void
-Cache::maintainClusivity(bool from_cache, CacheBlk *blk)
-{
-    if (from_cache && blk && blk->isValid() && !blk->isDirty() &&
-        clusivity == Enums::mostly_excl) {
-        // if we have responded to a cache, and our block is still
-        // valid, but not dirty, and this cache is mostly exclusive
-        // with respect to the cache above, drop the block
-        invalidateBlock(blk);
-    }
 }
 
 void
@@ -537,7 +548,8 @@ Cache::doWritebacksAtomic(PacketList& writebacks)
 void
 Cache::recvTimingSnoopResp(PacketPtr pkt)
 {
-    DPRINTF(Cache, "%s for %s\n", __func__, pkt->print());
+    DPRINTF(Cache, "%s for %s addr %#llx size %d\n", __func__,
+            pkt->cmdString(), pkt->getAddr(), pkt->getSize());
 
     assert(pkt->isResponse());
     assert(!system->bypassCaches());
@@ -585,7 +597,7 @@ Cache::promoteWholeLineWrites(PacketPtr pkt)
 bool
 Cache::recvTimingReq(PacketPtr pkt)
 {
-    DPRINTF(CacheTags, "%s tags:\n%s\n", __func__, tags->print());
+    DPRINTF(CacheTags, "%s tags: %s\n", __func__, tags->print());
 
     assert(pkt->isRequest());
 
@@ -603,8 +615,9 @@ Cache::recvTimingReq(PacketPtr pkt)
         // a cache above us (but not where the packet came from) is
         // responding to the request, in other words it has the line
         // in Modified or Owned state
-        DPRINTF(Cache, "Cache above responding to %s: not responding\n",
-                pkt->print());
+        DPRINTF(Cache, "Cache above responding to %#llx (%s): "
+                "not responding\n",
+                pkt->getAddr(), pkt->isSecure() ? "s" : "ns");
 
         // if the packet needs the block to be writable, and the cache
         // that has promised to respond (setting the cache responding
@@ -728,8 +741,9 @@ Cache::recvTimingReq(PacketPtr pkt)
             // by access(), that calls accessBlock() function.
             cpuSidePort->schedTimingResp(pkt, request_time, true);
         } else {
-            DPRINTF(Cache, "%s satisfied %s, no response needed\n", __func__,
-                    pkt->print());
+            DPRINTF(Cache, "%s satisfied %s addr %#llx, no response needed\n",
+                    __func__, pkt->cmdString(), pkt->getAddr(),
+                    pkt->getSize());
 
             // queue the packet for deletion, as the sending cache is
             // still relying on it; if the block is found in access(),
@@ -805,8 +819,9 @@ Cache::recvTimingReq(PacketPtr pkt)
                 if (pkt->cmd == MemCmd::CleanEvict) {
                     pendingDelete.reset(pkt);
                 } else {
-                    DPRINTF(Cache, "%s coalescing MSHR for %s\n", __func__,
-                            pkt->print());
+                    DPRINTF(Cache, "%s coalescing MSHR for %s addr %#llx "
+                            "size %d\n", __func__, pkt->cmdString(),
+                            pkt->getAddr(), pkt->getSize());
 
                     assert(pkt->req->masterId() < system->maxMasters());
                     mshr_hits[pkt->cmdToIndex()][pkt->req->masterId()]++;
@@ -909,8 +924,7 @@ Cache::createMissPacket(PacketPtr cpu_pkt, CacheBlk *blk,
     bool blkValid = blk && blk->isValid();
 
     if (cpu_pkt->req->isUncacheable() ||
-        (!blkValid && cpu_pkt->isUpgrade()) ||
-        cpu_pkt->cmd == MemCmd::InvalidateReq) {
+        (!blkValid && cpu_pkt->isUpgrade())) {
         // uncacheable requests and upgrades from upper-level caches
         // that missed completely just go through as is
         return nullptr;
@@ -924,13 +938,7 @@ Cache::createMissPacket(PacketPtr cpu_pkt, CacheBlk *blk,
     // write miss on a shared owned block will generate a ReadExcl,
     // which will clobber the owned copy.
     const bool useUpgrades = true;
-    if (cpu_pkt->cmd == MemCmd::WriteLineReq) {
-        assert(!blkValid || !blk->isWritable());
-        // forward as invalidate to all other caches, this gives us
-        // the line in Exclusive state, and invalidates all other
-        // copies
-        cmd = MemCmd::InvalidateReq;
-    } else if (blkValid && useUpgrades) {
+    if (blkValid && useUpgrades) {
         // only reason to be here is that blk is read only and we need
         // it to be writable
         assert(needsWritable);
@@ -943,6 +951,12 @@ Cache::createMissPacket(PacketPtr cpu_pkt, CacheBlk *blk,
         // where the determination the StoreCond fails is delayed due to
         // all caches not being on the same local bus.
         cmd = MemCmd::SCUpgradeFailReq;
+    } else if (cpu_pkt->cmd == MemCmd::WriteLineReq ||
+               cpu_pkt->cmd == MemCmd::InvalidateReq) {
+        // forward as invalidate to all other caches, this gives us
+        // the line in Exclusive state, and invalidates all other
+        // copies
+        cmd = MemCmd::InvalidateReq;
     } else {
         // block is invalid
         cmd = needsWritable ? MemCmd::ReadExReq :
@@ -953,22 +967,25 @@ Cache::createMissPacket(PacketPtr cpu_pkt, CacheBlk *blk,
     // if there are upstream caches that have already marked the
     // packet as having sharers (not passing writable), pass that info
     // downstream
-    if (cpu_pkt->hasSharers() && !needsWritable) {
+    if (cpu_pkt->hasSharers()) {
         // note that cpu_pkt may have spent a considerable time in the
         // MSHR queue and that the information could possibly be out
         // of date, however, there is no harm in conservatively
         // assuming the block has sharers
         pkt->setHasSharers();
-        DPRINTF(Cache, "%s: passing hasSharers from %s to %s\n",
-                __func__, cpu_pkt->print(), pkt->print());
+        DPRINTF(Cache, "%s passing hasSharers from %s to %s addr %#llx "
+                "size %d\n",
+                __func__, cpu_pkt->cmdString(), pkt->cmdString(),
+                pkt->getAddr(), pkt->getSize());
     }
 
     // the packet should be block aligned
     assert(pkt->getAddr() == blockAlign(pkt->getAddr()));
 
     pkt->allocate();
-    DPRINTF(Cache, "%s: created %s from %s\n", __func__, pkt->print(),
-            cpu_pkt->print());
+    DPRINTF(Cache, "%s created %s from %s for  addr %#llx size %d\n",
+            __func__, pkt->cmdString(), cpu_pkt->cmdString(), pkt->getAddr(),
+            pkt->getSize());
     return pkt;
 }
 
@@ -988,8 +1005,9 @@ Cache::recvAtomic(PacketPtr pkt)
     // follow the same flow as in recvTimingReq, and check if a cache
     // above us is responding
     if (pkt->cacheResponding()) {
-        DPRINTF(Cache, "Cache above responding to %s: not responding\n",
-                pkt->print());
+        DPRINTF(Cache, "Cache above responding to %#llx (%s): "
+                "not responding\n",
+                pkt->getAddr(), pkt->isSecure() ? "s" : "ns");
 
         // if a cache is responding, and it had the line in Owned
         // rather than Modified state, we need to invalidate any
@@ -1034,8 +1052,9 @@ Cache::recvAtomic(PacketPtr pkt)
             bus_pkt = pkt;
         }
 
-        DPRINTF(Cache, "%s: Sending an atomic %s\n", __func__,
-                bus_pkt->print());
+        DPRINTF(Cache, "Sending an atomic %s for %#llx (%s)\n",
+                bus_pkt->cmdString(), bus_pkt->getAddr(),
+                bus_pkt->isSecure() ? "s" : "ns");
 
 #if TRACING_ON
         CacheBlk::State old_state = blk ? blk->status : 0;
@@ -1046,8 +1065,10 @@ Cache::recvAtomic(PacketPtr pkt)
         bool is_invalidate = bus_pkt->isInvalidate();
 
         // We are now dealing with the response handling
-        DPRINTF(Cache, "%s: Receive response: %s in state %i\n", __func__,
-                bus_pkt->print(), old_state);
+        DPRINTF(Cache, "Receive response: %s for addr %#llx (%s) in "
+                "state %i\n", bus_pkt->cmdString(), bus_pkt->getAddr(),
+                bus_pkt->isSecure() ? "s" : "ns",
+                old_state);
 
         // If packet was a forward, the response (if any) is already
         // in place in the bus_pkt == pkt structure, so we don't need
@@ -1068,15 +1089,14 @@ Cache::recvAtomic(PacketPtr pkt)
                                      allocOnFill(pkt->cmd));
                     assert(blk != NULL);
                     is_invalidate = false;
-                    satisfyRequest(pkt, blk);
+                    satisfyCpuSideRequest(pkt, blk);
                 } else if (bus_pkt->isRead() ||
                            bus_pkt->cmd == MemCmd::UpgradeResp) {
                     // we're updating cache state to allow us to
                     // satisfy the upstream request from the cache
                     blk = handleFill(bus_pkt, blk, writebacks,
                                      allocOnFill(pkt->cmd));
-                    satisfyRequest(pkt, blk);
-                    maintainClusivity(pkt->fromCache(), blk);
+                    satisfyCpuSideRequest(pkt, blk);
                 } else {
                     // we're satisfying the upstream request without
                     // modifying cache state, e.g., a write-through
@@ -1183,7 +1203,8 @@ Cache::functionalAccess(PacketPtr pkt, bool fromCpuSide)
         || writeBuffer.checkFunctional(pkt, blk_addr)
         || memSidePort->checkFunctional(pkt);
 
-    DPRINTF(CacheVerbose, "%s: %s %s%s%s\n", __func__,  pkt->print(),
+    DPRINTF(CacheVerbose, "functional %s %#llx (%s) %s%s%s\n",
+            pkt->cmdString(), pkt->getAddr(), is_secure ? "s" : "ns",
             (blk && blk->isValid()) ? "valid " : "",
             have_data ? "data " : "", done ? "done " : "");
 
@@ -1238,12 +1259,14 @@ Cache::recvTimingResp(PacketPtr pkt)
     bool is_error = pkt->isError();
 
     if (is_error) {
-        DPRINTF(Cache, "%s: Cache received %s with error\n", __func__,
-                pkt->print());
+        DPRINTF(Cache, "Cache received packet with error for addr %#llx (%s), "
+                "cmd: %s\n", pkt->getAddr(), pkt->isSecure() ? "s" : "ns",
+                pkt->cmdString());
     }
 
-    DPRINTF(Cache, "%s: Handling response %s\n", __func__,
-            pkt->print());
+    DPRINTF(Cache, "Handling response %s for addr %#llx size %d (%s)\n",
+            pkt->cmdString(), pkt->getAddr(), pkt->getSize(),
+            pkt->isSecure() ? "s" : "ns");
 
     // if this is a write, we should be looking at an uncacheable
     // write
@@ -1300,7 +1323,7 @@ Cache::recvTimingResp(PacketPtr pkt)
         DPRINTF(Cache, "Block for addr %#llx being updated in Cache\n",
                 pkt->getAddr());
 
-        blk = handleFill(pkt, blk, writebacks, mshr->allocOnFill());
+        blk = handleFill(pkt, blk, writebacks, mshr->allocOnFill);
         assert(blk != nullptr);
     }
 
@@ -1311,11 +1334,11 @@ Cache::recvTimingResp(PacketPtr pkt)
     // First offset for critical word first calculations
     int initial_offset = initial_tgt->pkt->getOffset(blkSize);
 
-    bool from_cache = false;
-    MSHR::TargetList targets = mshr->extractServiceableTargets(pkt);
-    for (auto &target: targets) {
-        Packet *tgt_pkt = target.pkt;
-        switch (target.source) {
+    while (mshr->hasTargets()) {
+        MSHR::Target *target = mshr->getTarget();
+        Packet *tgt_pkt = target->pkt;
+
+        switch (target->source) {
           case MSHR::Target::FromCPU:
             Tick completion_time;
             // Here we charge on completion_time the delay of the xbar if the
@@ -1333,10 +1356,6 @@ Cache::recvTimingResp(PacketPtr pkt)
                 break; // skip response
             }
 
-            // keep track of whether we have responded to another
-            // cache
-            from_cache = from_cache || tgt_pkt->fromCache();
-
             // unlike the other packet flows, where data is found in other
             // caches or memory and brought back, write-line requests always
             // have the data right away, so the above check for "is fill?"
@@ -1349,8 +1368,7 @@ Cache::recvTimingResp(PacketPtr pkt)
                 // any deferred targets if possible
                 mshr->promoteWritable();
                 // NB: we use the original packet here and not the response!
-                blk = handleFill(tgt_pkt, blk, writebacks,
-                                 targets.allocOnFill);
+                blk = handleFill(tgt_pkt, blk, writebacks, mshr->allocOnFill);
                 assert(blk != nullptr);
 
                 // treat as a fill, and discard the invalidation
@@ -1360,7 +1378,8 @@ Cache::recvTimingResp(PacketPtr pkt)
             }
 
             if (is_fill) {
-                satisfyRequest(tgt_pkt, blk, true, mshr->hasPostDowngrade());
+                satisfyCpuSideRequest(tgt_pkt, blk,
+                                      true, mshr->hasPostDowngrade());
 
                 // How many bytes past the first request is this one
                 int transfer_offset =
@@ -1380,7 +1399,7 @@ Cache::recvTimingResp(PacketPtr pkt)
 
                 assert(tgt_pkt->req->masterId() < system->maxMasters());
                 missLatency[tgt_pkt->cmdToIndex()][tgt_pkt->req->masterId()] +=
-                    completion_time - target.recvTime;
+                    completion_time - target->recvTime;
             } else if (pkt->cmd == MemCmd::UpgradeFailResp) {
                 // failed StoreCond upgrade
                 assert(tgt_pkt->cmd == MemCmd::StoreCondReq ||
@@ -1393,17 +1412,6 @@ Cache::recvTimingResp(PacketPtr pkt)
                     pkt->payloadDelay;
                 tgt_pkt->req->setExtraData(0);
             } else {
-                // We are about to send a response to a cache above
-                // that asked for an invalidation; we need to
-                // invalidate our copy immediately as the most
-                // up-to-date copy of the block will now be in the
-                // cache above. It will also prevent this cache from
-                // responding (if the block was previously dirty) to
-                // snoops as they should snoop the caches above where
-                // they will get the response from.
-                if (is_invalidate && blk && blk->isValid()) {
-                    invalidateBlock(blk);
-                }
                 // not a cache fill, just forwarding response
                 // responseLatency is the latency of the return path
                 // from lower level cahces/memory to the core.
@@ -1427,8 +1435,8 @@ Cache::recvTimingResp(PacketPtr pkt)
                 // propagate that.  Response should not have
                 // isInvalidate() set otherwise.
                 tgt_pkt->cmd = MemCmd::ReadRespWithInvalidate;
-                DPRINTF(Cache, "%s: updated cmd to %s\n", __func__,
-                        tgt_pkt->print());
+                DPRINTF(Cache, "%s updated cmd to %s for addr %#llx\n",
+                        __func__, tgt_pkt->cmdString(), tgt_pkt->getAddr());
             }
             // Reset the bus additional time as it is now accounted for
             tgt_pkt->headerDelay = tgt_pkt->payloadDelay = 0;
@@ -1448,27 +1456,16 @@ Cache::recvTimingResp(PacketPtr pkt)
             assert(!is_error);
             // response to snoop request
             DPRINTF(Cache, "processing deferred snoop...\n");
-            // If the response is invalidating, a snooping target can
-            // be satisfied if it is also invalidating. If the reponse is, not
-            // only invalidating, but more specifically an InvalidateResp, the
-            // MSHR was created due to an InvalidateReq and a cache above is
-            // waiting to satisfy a WriteLineReq. In this case even an
-            // non-invalidating snoop is added as a target here since this is
-            // the ordering point. When the InvalidateResp reaches this cache,
-            // the snooping target will snoop further the cache above with the
-            // WriteLineReq.
-            assert(!(is_invalidate &&
-                     pkt->cmd != MemCmd::InvalidateResp &&
-                     !mshr->hasPostInvalidate()));
+            assert(!(is_invalidate && !mshr->hasPostInvalidate()));
             handleSnoop(tgt_pkt, blk, true, true, mshr->hasPostInvalidate());
             break;
 
           default:
-            panic("Illegal target->source enum %d\n", target.source);
+            panic("Illegal target->source enum %d\n", target->source);
         }
-    }
 
-    maintainClusivity(from_cache, blk);
+        mshr->popTarget();
+    }
 
     if (blk && blk->isValid()) {
         // an invalidate response stemming from a write line request
@@ -1534,7 +1531,8 @@ Cache::recvTimingResp(PacketPtr pkt)
         blk->invalidate();
     }
 
-    DPRINTF(CacheVerbose, "%s: Leaving with %s\n", __func__, pkt->print());
+    DPRINTF(CacheVerbose, "Leaving %s with %s for addr %#llx\n", __func__,
+            pkt->cmdString(), pkt->getAddr());
     delete pkt;
 }
 
@@ -1560,8 +1558,8 @@ Cache::writebackBlk(CacheBlk *blk)
         new Packet(req, blk->isDirty() ?
                    MemCmd::WritebackDirty : MemCmd::WritebackClean);
 
-    DPRINTF(Cache, "Create Writeback %s writable: %d, dirty: %d\n",
-            pkt->print(), blk->isWritable(), blk->isDirty());
+    DPRINTF(Cache, "Create Writeback %#llx writable: %d, dirty: %d\n",
+            pkt->getAddr(), blk->isWritable(), blk->isDirty());
 
     if (blk->isWritable()) {
         // not asserting shared means we pass the block in modified
@@ -1599,7 +1597,9 @@ Cache::cleanEvictBlk(CacheBlk *blk)
 
     PacketPtr pkt = new Packet(req, MemCmd::CleanEvict);
     pkt->allocate();
-    DPRINTF(Cache, "Create CleanEvict %s\n", pkt->print());
+    DPRINTF(Cache, "%s%s %x Create CleanEvict\n", pkt->cmdString(),
+            pkt->req->isInstFetch() ? " (ifetch)" : "",
+            pkt->getAddr());
 
     return pkt;
 }
@@ -1665,9 +1665,9 @@ Cache::invalidateVisitor(CacheBlk &blk)
 }
 
 CacheBlk*
-Cache::allocateBlock(Addr addr, bool is_secure, PacketList &writebacks)
+Cache::allocateBlock(Addr addr, bool is_secure, PacketList &writebacks, PacketPtr pkt)
 {
-    CacheBlk *blk = tags->findVictim(addr);
+    CacheBlk *blk = tags->findVictim(addr, pkt);
 
     // It is valid to return nullptr if there is no victim
     if (!blk)
@@ -1734,19 +1734,19 @@ Cache::handleFill(PacketPtr pkt, CacheBlk *blk, PacketList &writebacks,
     // When handling a fill, we should have no writes to this line.
     assert(addr == blockAlign(addr));
     assert(!writeBuffer.findMatch(addr, is_secure));
-
+	
     if (blk == nullptr) {
         // better have read new data...
         assert(pkt->hasData());
 
         // only read responses and write-line requests have data;
         // note that we don't write the data here for write-line - that
-        // happens in the subsequent call to satisfyRequest
+        // happens in the subsequent satisfyCpuSideRequest.
         assert(pkt->isRead() || pkt->cmd == MemCmd::WriteLineReq);
-
+        //tags->storeTempPkt(pkt);
         // need to do a replacement if allocating, otherwise we stick
         // with the temporary storage
-        blk = allocate ? allocateBlock(addr, is_secure, writebacks) : nullptr;
+        blk = allocate ? allocateBlock(addr, is_secure, writebacks, pkt) : nullptr;
 
         if (blk == nullptr) {
             // No replaceable block or a mostly exclusive
@@ -1780,9 +1780,12 @@ Cache::handleFill(PacketPtr pkt, CacheBlk *blk, PacketList &writebacks,
 
     // sanity check for whole-line writes, which should always be
     // marked as writable as part of the fill, and then later marked
-    // dirty as part of satisfyRequest
+    // dirty as part of satisfyCpuSideRequest
     if (pkt->cmd == MemCmd::WriteLineReq) {
         assert(!pkt->hasSharers());
+        // at the moment other caches do not respond to the
+        // invalidation requests corresponding to a whole-line write
+        assert(!pkt->cacheResponding());
     }
 
     // here we deal with setting the appropriate state of the line,
@@ -1844,7 +1847,8 @@ Cache::doTimingSupplyResponse(PacketPtr req_pkt, const uint8_t *blk_data,
     assert(req_pkt->isRequest());
     assert(req_pkt->needsResponse());
 
-    DPRINTF(Cache, "%s: for %s\n", __func__, req_pkt->print());
+    DPRINTF(Cache, "%s for %s addr %#llx size %d\n", __func__,
+            req_pkt->cmdString(), req_pkt->getAddr(), req_pkt->getSize());
     // timing-mode snoop responses require a new packet, unless we
     // already made a copy...
     PacketPtr pkt = req_pkt;
@@ -1876,8 +1880,10 @@ Cache::doTimingSupplyResponse(PacketPtr req_pkt, const uint8_t *blk_data,
     Tick forward_time = clockEdge(forwardLatency) + pkt->headerDelay;
     // Here we reset the timing of the packet.
     pkt->headerDelay = pkt->payloadDelay = 0;
-    DPRINTF(CacheVerbose, "%s: created response: %s tick: %lu\n", __func__,
-            pkt->print(), forward_time);
+    DPRINTF(CacheVerbose,
+            "%s created response: %s addr %#llx size %d tick: %lu\n",
+            __func__, pkt->cmdString(), pkt->getAddr(), pkt->getSize(),
+            forward_time);
     memSidePort->schedTimingSnoopResp(pkt, forward_time, true);
 }
 
@@ -1885,7 +1891,8 @@ uint32_t
 Cache::handleSnoop(PacketPtr pkt, CacheBlk *blk, bool is_timing,
                    bool is_deferred, bool pending_inval)
 {
-    DPRINTF(CacheVerbose, "%s: for %s\n", __func__, pkt->print());
+    DPRINTF(CacheVerbose, "%s for %s addr %#llx size %d\n", __func__,
+            pkt->cmdString(), pkt->getAddr(), pkt->getSize());
     // deferred snoops can only happen in timing mode
     assert(!(is_deferred && !is_timing));
     // pending_inval only makes sense on deferred snoops
@@ -1902,8 +1909,8 @@ Cache::handleSnoop(PacketPtr pkt, CacheBlk *blk, bool is_timing,
     // have the invalidate flag, and we need a suitable way of dealing
     // with this case
     panic_if(invalidate && pkt->req->isUncacheable(),
-             "%s got an invalidating uncacheable snoop request %s",
-             name(), pkt->print());
+             "%s got an invalidating uncacheable snoop request %s to %#llx",
+             name(), pkt->cmdString(), pkt->getAddr());
 
     uint32_t snoop_delay = 0;
 
@@ -1956,8 +1963,6 @@ Cache::handleSnoop(PacketPtr pkt, CacheBlk *blk, bool is_timing,
     }
 
     if (!blk || !blk->isValid()) {
-        DPRINTF(CacheVerbose, "%s: snoop miss for %s\n", __func__,
-                pkt->print());
         if (is_deferred) {
             // we no longer have the block, and will not respond, but a
             // packet was allocated in MSHR::handleSnoop and we have
@@ -1970,10 +1975,14 @@ Cache::handleSnoop(PacketPtr pkt, CacheBlk *blk, bool is_timing,
 
             delete pkt;
         }
+
+        DPRINTF(CacheVerbose, "%s snoop miss for %s addr %#llx size %d\n",
+                __func__, pkt->cmdString(), pkt->getAddr(), pkt->getSize());
         return snoop_delay;
     } else {
-        DPRINTF(Cache, "%s: snoop hit for %s, old state is %s\n", __func__,
-                pkt->print(), blk->print());
+        DPRINTF(Cache, "%s snoop hit for %s addr %#llx size %d, "
+                "old state is %s\n", __func__, pkt->cmdString(),
+                pkt->getAddr(), pkt->getSize(), blk->print());
     }
 
     chatty_assert(!(isReadOnly && blk->isDirty()),
@@ -1982,10 +1991,11 @@ Cache::handleSnoop(PacketPtr pkt, CacheBlk *blk, bool is_timing,
 
     // We may end up modifying both the block state and the packet (if
     // we respond in atomic mode), so just figure out what to do now
-    // and then do it later. We respond to all snoops that need
-    // responses provided we have the block in dirty state. The
+    // and then do it later. If we find dirty data while snooping for
+    // an invalidate, we don't need to send a response. The
     // invalidation itself is taken care of below.
-    bool respond = blk->isDirty() && pkt->needsResponse();
+    bool respond = blk->isDirty() && pkt->needsResponse() &&
+        pkt->cmd != MemCmd::InvalidateReq;
     bool have_writable = blk->isWritable();
 
     // Invalidate any prefetch's from below that would strip write permissions
@@ -1994,7 +2004,7 @@ Cache::handleSnoop(PacketPtr pkt, CacheBlk *blk, bool is_timing,
     // downstream caches observe.
     if (pkt->mustCheckAbove()) {
         DPRINTF(Cache, "Found addr %#llx in upper level cache for snoop %s "
-                "from lower cache\n", pkt->getAddr(), pkt->print());
+                "from lower cache\n", pkt->getAddr(), pkt->cmdString());
         pkt->setBlockCached();
         return snoop_delay;
     }
@@ -2037,8 +2047,9 @@ Cache::handleSnoop(PacketPtr pkt, CacheBlk *blk, bool is_timing,
         // if we are returning a writable and dirty (Modified) line,
         // we should be invalidating the line
         panic_if(!invalidate && !pkt->hasSharers(),
-                 "%s is passing a Modified line through %s, "
-                 "but keeping the block", name(), pkt->print());
+                 "%s is passing a Modified line through %s to %#llx, "
+                 "but keeping the block",
+                 name(), pkt->cmdString(), pkt->getAddr());
 
         if (is_timing) {
             doTimingSupplyResponse(pkt, blk->data, is_deferred, pending_inval);
@@ -2051,17 +2062,13 @@ Cache::handleSnoop(PacketPtr pkt, CacheBlk *blk, bool is_timing,
         }
     }
 
-    if (!respond && is_deferred) {
+    if (!respond && is_timing && is_deferred) {
+        // if it's a deferred timing snoop to which we are not
+        // responding, then we've made a copy of both the request and
+        // the packet, delete them here
         assert(pkt->needsResponse());
-
-        // if we copied the deferred packet with the intention to
-        // respond, but are not responding, then a cache above us must
-        // be, and we can use this as the indication of whether this
-        // is a packet where we created a copy of the request or not
-        if (!pkt->cacheResponding()) {
-            delete pkt->req;
-        }
-
+        assert(!pkt->cacheResponding());
+        delete pkt->req;
         delete pkt;
     }
 
@@ -2080,7 +2087,8 @@ Cache::handleSnoop(PacketPtr pkt, CacheBlk *blk, bool is_timing,
 void
 Cache::recvTimingSnoopReq(PacketPtr pkt)
 {
-    DPRINTF(CacheVerbose, "%s: for %s\n", __func__, pkt->print());
+    DPRINTF(CacheVerbose, "%s for %s addr %#llx size %d\n", __func__,
+            pkt->cmdString(), pkt->getAddr(), pkt->getSize());
 
     // Snoops shouldn't happen when bypassing caches
     assert(!system->bypassCaches());
@@ -2107,8 +2115,9 @@ Cache::recvTimingSnoopReq(PacketPtr pkt)
     // Inform request(Prefetch, CleanEvict or Writeback) from below of
     // MSHR hit, set setBlockCached.
     if (mshr && pkt->mustCheckAbove()) {
-        DPRINTF(Cache, "Setting block cached for %s from lower cache on "
-                "mshr hit\n", pkt->print());
+        DPRINTF(Cache, "Setting block cached for %s from"
+                "lower cache on mshr hit %#x\n",
+                pkt->cmdString(), pkt->getAddr());
         pkt->setBlockCached();
         return;
     }
@@ -2145,8 +2154,8 @@ Cache::recvTimingSnoopReq(PacketPtr pkt)
             // propagate the BLOCK_CACHED flag in Writeback packets and prevent
             // any CleanEvicts from travelling down the memory hierarchy.
             pkt->setBlockCached();
-            DPRINTF(Cache, "%s: Squashing %s from lower cache on writequeue "
-                    "hit\n", __func__, pkt->print());
+            DPRINTF(Cache, "Squashing %s from lower cache on writequeue hit"
+                    " %#x\n", pkt->cmdString(), pkt->getAddr());
             return;
         }
 
@@ -2156,7 +2165,7 @@ Cache::recvTimingSnoopReq(PacketPtr pkt)
         // state to determine if it is dirty and writable, we use the
         // command and fields of the writeback packet
         bool respond = wb_pkt->cmd == MemCmd::WritebackDirty &&
-            pkt->needsResponse();
+            pkt->needsResponse() && pkt->cmd != MemCmd::InvalidateReq;
         bool have_writable = !wb_pkt->hasSharers();
         bool invalidate = pkt->isInvalidate();
 
@@ -2358,7 +2367,9 @@ Cache::sendMSHRQueuePacket(MSHR* mshr)
     // use request from 1st target
     PacketPtr tgt_pkt = mshr->getTarget()->pkt;
 
-    DPRINTF(Cache, "%s: MSHR %s\n", __func__, tgt_pkt->print());
+    DPRINTF(Cache, "%s MSHR %s for addr %#llx size %d\n", __func__,
+            tgt_pkt->cmdString(), tgt_pkt->getAddr(),
+            tgt_pkt->getSize());
 
     CacheBlk *blk = tags->findBlock(mshr->blkAddr, mshr->isSecure);
 
@@ -2476,7 +2487,9 @@ Cache::sendWriteQueuePacket(WriteQueueEntry* wq_entry)
     // always a single target for write queue entries
     PacketPtr tgt_pkt = wq_entry->getTarget()->pkt;
 
-    DPRINTF(Cache, "%s: write %s\n", __func__, tgt_pkt->print());
+    DPRINTF(Cache, "%s write %s for addr %#llx size %d\n", __func__,
+            tgt_pkt->cmdString(), tgt_pkt->getAddr(),
+            tgt_pkt->getSize());
 
     // forward as is, both for evictions and uncacheable writes
     if (!memSidePort->sendTimingReq(tgt_pkt)) {

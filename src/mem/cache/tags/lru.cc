@@ -46,7 +46,7 @@
  */
 
 #include "mem/cache/tags/lru.hh"
-
+#include "mem/cache/tags/car.hh"
 #include "debug/CacheRepl.hh"
 #include "mem/cache/base.hh"
 
@@ -72,18 +72,28 @@ LRU::accessBlock(Addr addr, bool is_secure, Cycles &lat, int master_id)
 }
 
 CacheBlk*
-LRU::findVictim(Addr addr)
+LRU::findVictim(Addr addr, PacketPtr pkt)
 {
     int set = extractSet(addr);
     // grab a replacement candidate
     BlkType *blk = nullptr;
-    for (int i = assoc - 1; i >= 0; i--) {
+    for (int i = assoc - 1; i >= 0; i--) { // replace the second to LRU
         BlkType *b = sets[set].blks[i];
         if (b->way < allocAssoc) {
             blk = b;
             break;
         }
     }
+    std::vector<int> lru_trans(5, 0);
+    std::vector<int> opt_trans(5, 0);
+    opt_trans = CAR::lineCompare_2bit(blk->data, pkt->getConstPtr<uint8_t>(), 64, 64, 8, sets[set].flipBits[blk->way]);
+    lru_trans = CAR::lineCompare_2bit(blk->data, pkt->getConstPtr<uint8_t>(), 64, 64, 64, 0); // no flip
+    for(int i = 0; i < 4 ; i++){
+		optimalTrans[i] += opt_trans[i];
+		lruTrans[i] += lru_trans[i];
+	}
+		
+	sets[set].flipBits[blk->way] = 	opt_trans[4];
     assert(!blk || blk->way < allocAssoc);
 
     if (blk && blk->isValid()) {

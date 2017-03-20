@@ -186,16 +186,6 @@ FALRU::accessBlock(Addr addr, bool is_secure, Cycles &lat, int context_src,
     FALRUBlk* blk = hashLookup(blkAddr);
 
     if (blk && blk->isValid()) {
-        // If a cache hit
-        lat = accessLatency;
-        // Check if the block to be accessed is available. If not,
-        // apply the accessLatency on top of block->whenReady.
-        if (blk->whenReady > curTick() &&
-            cache->ticksToCycles(blk->whenReady - curTick()) >
-            accessLatency) {
-            lat = cache->ticksToCycles(blk->whenReady - curTick()) +
-            accessLatency;
-        }
         assert(blk->tag == blkAddr);
         tmp_in_cache = blk->inCache;
         for (unsigned i = 0; i < numCaches; i++) {
@@ -210,8 +200,6 @@ FALRU::accessBlock(Addr addr, bool is_secure, Cycles &lat, int context_src,
             moveToHead(blk);
         }
     } else {
-        // If a cache miss
-        lat = lookupLatency;
         blk = nullptr;
         for (unsigned i = 0; i <= numCaches; ++i) {
             misses[i]++;
@@ -221,6 +209,7 @@ FALRU::accessBlock(Addr addr, bool is_secure, Cycles &lat, int context_src,
         *inCache = tmp_in_cache;
     }
 
+    lat = accessLatency;
     //assert(check());
     return blk;
 }
@@ -248,7 +237,7 @@ FALRU::findBlockBySetAndWay(int set, int way) const
 }
 
 CacheBlk*
-FALRU::findVictim(Addr addr)
+FALRU::findVictim(Addr addr, PacketPtr pkt)
 {
     FALRUBlk * blk = tail;
     assert(blk->inCache == 0);

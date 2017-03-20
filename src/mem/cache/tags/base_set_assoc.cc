@@ -82,11 +82,12 @@ BaseSetAssoc::BaseSetAssoc(const Params *p)
     // allocate data storage in one big chunk
     numBlocks = numSets * assoc;
     dataBlks = new uint8_t[numBlocks * blkSize];
-
+	range = 4; // modified by Qi
     unsigned blkIndex = 0;       // index into blks array
     for (unsigned i = 0; i < numSets; ++i) {
         sets[i].assoc = assoc;
-
+        sets[i].m_tree = new uint8_t[assoc];
+        sets[i].flipBits = new int[assoc]; 
         sets[i].blks = new BlkType*[assoc];
 
         // link in the data blocks
@@ -94,6 +95,7 @@ BaseSetAssoc::BaseSetAssoc(const Params *p)
             // locate next cache block
             BlkType *blk = &blks[blkIndex];
             blk->data = &dataBlks[blkSize*blkIndex];
+            std::memset(blk->data, 0, blkSize);
             ++blkIndex;
 
             // invalidate new cache block

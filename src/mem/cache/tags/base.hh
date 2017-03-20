@@ -69,13 +69,7 @@ class BaseTags : public ClockedObject
     const unsigned blkSize;
     /** The size of the cache. */
     const unsigned size;
-    /** The tag lookup latency of the cache. */
-    const Cycles lookupLatency;
-    /**
-     * The total access latency of the cache. This latency
-     * is different depending on the cache access mode
-     * (parallel or sequential)
-     */
+    /** The access latency of the cache. */
     const Cycles accessLatency;
     /** Pointer to the parent cache. */
     BaseCache *cache;
@@ -99,6 +93,24 @@ class BaseTags : public ClockedObject
 
     /** Number of replacements of valid blocks per thread. */
     Stats::Vector replacements;
+    /** average Number of flip bits of different Hamming distance HD*/
+    Stats::AverageVector avgZT;
+    Stats::AverageVector avgST;
+    Stats::AverageVector avgHT;
+    Stats::AverageVector avgTT;
+    /** total Number of flip bits of different Hamming distance HD*/
+    Stats::Vector totalZT;
+    Stats::Vector totalST;
+    Stats::Vector totalHT;
+    Stats::Vector totalTT;
+    
+    Stats::AverageVector avgFlipbits;
+    
+    Stats::Vector totalFlipbits;
+    /** total Number of 4 trans*/
+    Stats::Vector lruTrans;
+    /** total Number of 4 trans*/
+    Stats::Vector optimalTrans;
     /** Per cycle average of the number of tags that hold valid data. */
     Stats::Average tagsInUse;
 
@@ -238,7 +250,7 @@ class BaseTags : public ClockedObject
 
     virtual Addr regenerateBlkAddr(Addr tag, unsigned set) const = 0;
 
-    virtual CacheBlk* findVictim(Addr addr) = 0;
+    virtual CacheBlk* findVictim(Addr addr, PacketPtr pkt = nullptr) = 0;
 
     virtual int extractSet(Addr addr) const = 0;
 

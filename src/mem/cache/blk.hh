@@ -102,7 +102,7 @@ class CacheBlk
 
     /** The current status of this block. @sa CacheBlockStatusBits */
     State status;
-
+	unsigned encodingBits;
     /** Which curTick() will this block be accessable */
     Tick whenReady;
 
@@ -169,7 +169,7 @@ class CacheBlk
 
     CacheBlk()
         : task_id(ContextSwitchTaskId::Unknown),
-          asid(-1), tag(0), data(0) ,size(0), status(0), whenReady(0),
+          asid(-1), tag(0), data(0) ,size(0), status(0), encodingBits(0), whenReady(0),
           set(-1), way(-1), isTouched(false), refCount(0),
           srcMasterId(Request::invldMasterId),
           tickInserted(0)
