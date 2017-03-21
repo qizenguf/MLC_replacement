@@ -280,7 +280,7 @@ else:
     MemClass = Simulation.setMemClass(options)
     system.membus = SystemXBar()
     system.system_port = system.membus.slave
-    CacheConfig.config_cache(options, system)
+    CacheConfig_l3.config_cache(options, system)
     MemConfig.config_mem(options, system)
 
 root = Root(full_system = False, system = system)

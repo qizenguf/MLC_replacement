@@ -91,7 +91,7 @@ def config_cache(options, system):
 	if options.l3_tags == 2:
 		system.l3.tags = MLC(loc_weight = 0)
 	if options.l3_tags == 3:
-		system.l3.tags = MLX(loc_weight = 510)
+		system.l3.tags = MLC(loc_weight = 510)
 
     for i in xrange(options.num_cpus):
         if options.caches:

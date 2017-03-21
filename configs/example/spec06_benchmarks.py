@@ -285,6 +285,7 @@ astar.executable = '/home/qizeng/cpu2006/benchspec/CPU2006/473.astar/run/run_bas
 #astar.cmd = [astar.executable] + ['lake.cfg']
 # REF CMDS
 astar.cmd = [astar.executable] + ['rivers.cfg']
+astar.cwd = '/home/qizeng/cpu2006/benchspec/CPU2006/473.astar/run/run_base_ref_my-alpha.0000/'
 #astar.output = out_dir + 'astar.out'
 
 #481.wrf

@@ -95,7 +95,7 @@ numThreads = 1
 if options.benchmark:
     print 'Selected SPEC_CPU2006 4mix benchmark'
     if options.benchmark == 'mix1':
-        print '--> bzip2, bzip2, gcc, gcc'
+        print '--> bzip2, astar, gobmk, mcf'
         pro1 = spec06_4mix_benchmarks.bzip2
         multiprocesses.append(pro1)
     	pro2 = spec06_4mix_benchmarks.bzip2

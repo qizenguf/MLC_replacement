@@ -45,6 +45,7 @@ fi
 BENCHMARK=$1                   # Benchmark name, e.g. bzip2
 OUTPUT_DIR=$2                  # Directory to place run output. Make sure this exists!
 WARM_LEN=1000000000
+RUN_LEN=200000000
 if [[ "$ARGC" == 3 ]]; then
 	WARM_LEN=$3
 fi
@@ -230,4 +231,4 @@ echo "" | tee -a $SCRIPT_OUT
 if [ ! -d "$OUTPUT_DIR/$BENCHMARK/lru2b" ]; then
 	mkdir $OUTPUT_DIR/$BENCHMARK/lru2b
 fi
-$GEM5_DIR/build/ALPHA/gem5.opt --outdir=$OUTPUT_DIR/$BENCHMARK/lru2b $GEM5_DIR/configs/example/spec06_config_single.py --benchmark=$BENCHMARK --cpu-type=TimingSimpleCPU --cpu-clock=3.2GHz --mem-size=4GB --mem-channels=2 --mem-type=LPDDR3_1600_x32 --caches --l1i_size=32kB --l1i_assoc=8 --l1d_size=32kB --l1d_assoc=8 --l2cache --l2_size=256kB --l2_assoc=8 --l3cache --l3_size=4MB --l3_assoc=32 --l3_tags=3 --fast-forward=$WARM_LEN --maxinsts=$RUN_LEN
+$GEM5_DIR/build/ALPHA/gem5.opt --outdir=$OUTPUT_DIR/$BENCHMARK/lru2b $GEM5_DIR/configs/example/spec06_config_single.py --benchmark=$BENCHMARK --cpu-type=TimingSimpleCPU --cpu-clock=3.2GHz --mem-size=4GB --mem-channels=2 --mem-type=DDR3_1600_8x8 --caches --l1i_size=32kB --l1i_assoc=8 --l1d_size=32kB --l1d_assoc=8 --l2cache --l2_size=256kB --l2_assoc=8 --l3cache --l3_size=4MB --l3_assoc=32 --l3_tags=3 --fast-forward=$WARM_LEN --maxinsts=$RUN_LEN
